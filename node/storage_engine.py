@@ -2,7 +2,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from node.cache import Cache
 from node.errors import VersionConflictError
@@ -14,6 +14,9 @@ from node.oplog import Oplog
 from node.validation import validate_delete, validate_write
 
 log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from node.replication_service import ReplicationService
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,7 @@ class StorageEngine:
         self._lock = threading.Lock()
         self._closed = False
         self._last_checkpoint_lsn = 0
+        self._replication_service: Optional["ReplicationService"] = None
 
         self.metrics = Metrics()
         self.cache = Cache(max_entries=cache_max_entries)
@@ -168,31 +172,72 @@ class StorageEngine:
             self.db.count_blocks(),
         )
 
-    def write(self, block_id, data, version=None):
+    def set_replication_service(self, service: "ReplicationService") -> None:
+        self._replication_service = service
+
+    def write_local(
+        self,
+        block_id,
+        data,
+        version=None,
+        origin_node_id=None,
+        origin_lsn=None,
+        allow_idempotent=False,
+    ):
+        """Apply a write locally without triggering replication."""
         self._ensure_open()
-        validate_write(block_id, data, version)
+        if not allow_idempotent:
+            validate_write(block_id, data, version)
 
         with self._lock:
-            resolved_version = self._resolve_write_version(block_id, version)
+            if allow_idempotent:
+                current = self.db.get_row(block_id)
+                if current and not current["deleted"]:
+                    if current["version"] > version:
+                        raise VersionConflictError(
+                            block_id, version, current["version"]
+                        )
+                    if current["version"] == version:
+                        return current["version"], current.get("origin_lsn") or 0
+
+            resolved_version = version
+            if not allow_idempotent:
+                resolved_version = self._resolve_write_version(block_id, version)
+
             lsn = self.oplog.append(
                 OpType.WRITE,
                 block_id,
                 data=data,
                 version=resolved_version,
             )
+            effective_origin = origin_node_id or self.node_id
+            effective_lsn = origin_lsn if origin_lsn is not None else lsn
             self._apply_write_entry(
                 {
                     "block_id": block_id,
                     "data": data,
                     "version": resolved_version,
-                    "node_id": self.node_id,
-                    "lsn": lsn,
+                    "node_id": effective_origin,
+                    "lsn": effective_lsn,
                     "ts_ms": None,
                 },
             )
             self._update_manifest()
             self.metrics.inc_writes()
-            return True
+            return resolved_version, lsn
+
+    def write(self, block_id, data, version=None):
+        self._ensure_open()
+        validate_write(block_id, data, version)
+
+        resolved_version, lsn = self.write_local(block_id, data, version)
+
+        if self._replication_service is not None:
+            self._replication_service.replicate_write(
+                block_id, data, resolved_version, lsn
+            )
+
+        return True
 
     def read(self, block_id):
         record = self.read_block(block_id)
@@ -239,30 +284,65 @@ class StorageEngine:
                 origin_lsn=row.get("origin_lsn"),
             )
 
-    def delete(self, block_id):
+    def delete_local(
+        self,
+        block_id,
+        version=None,
+        origin_node_id=None,
+        origin_lsn=None,
+        allow_idempotent=False,
+    ):
+        """Apply a delete locally without triggering replication."""
         self._ensure_open()
-        validate_delete(block_id)
+        if not allow_idempotent:
+            validate_delete(block_id)
 
         with self._lock:
-            version = self._resolve_delete_version(block_id)
+            if allow_idempotent and version is not None:
+                current = self.db.get_row(block_id)
+                if current:
+                    if current["version"] > version:
+                        raise VersionConflictError(
+                            block_id, version, current["version"]
+                        )
+                    if current["version"] >= version and current["deleted"]:
+                        return current["version"], current.get("origin_lsn") or 0
+
+            resolved_version = version
+            if resolved_version is None:
+                resolved_version = self._resolve_delete_version(block_id)
+
             lsn = self.oplog.append(
                 OpType.DELETE,
                 block_id,
                 data=None,
-                version=version,
+                version=resolved_version,
             )
+            effective_origin = origin_node_id or self.node_id
+            effective_lsn = origin_lsn if origin_lsn is not None else lsn
             self._apply_delete_entry(
                 {
                     "block_id": block_id,
-                    "version": version,
-                    "node_id": self.node_id,
-                    "lsn": lsn,
+                    "version": resolved_version,
+                    "node_id": effective_origin,
+                    "lsn": effective_lsn,
                     "ts_ms": None,
                 },
             )
             self._update_manifest()
             self.metrics.inc_deletes()
-            return True
+            return resolved_version, lsn
+
+    def delete(self, block_id):
+        self._ensure_open()
+        validate_delete(block_id)
+
+        version, lsn = self.delete_local(block_id)
+
+        if self._replication_service is not None:
+            self._replication_service.replicate_delete(block_id, version, lsn)
+
+        return True
 
     def list_blocks(self):
         self._ensure_open()

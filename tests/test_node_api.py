@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from node.api_server import create_app
+from replication_helpers import NoPlacementMetadataClient
 
 
 @pytest.fixture
@@ -13,6 +14,9 @@ def client(tmp_path):
         data_dir=str(tmp_path / "node1"),
         metadata_url="http://localhost:9999",
         address="node1:8001",
+        metadata_client=NoPlacementMetadataClient("http://localhost:9999"),
+        start_worker=False,
+        start_heartbeat=False,
     )
     with TestClient(app) as test_client:
         yield test_client

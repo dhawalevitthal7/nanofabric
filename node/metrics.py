@@ -14,6 +14,12 @@ class Metrics:
         self.fsync_count = 0
         self.fsync_ms_total = 0.0
         self.corruption_events = 0
+        self.successful_replications = 0
+        self.failed_replications = 0
+        self.retry_count = 0
+        self.replication_latency_ms_total = 0.0
+        self.replication_latency_count = 0
+        self.degraded_replications = 0
 
     def inc_writes(self):
         with self._lock:
@@ -44,6 +50,27 @@ class Metrics:
         with self._lock:
             self.corruption_events += 1
 
+    def inc_successful_replications(self):
+        with self._lock:
+            self.successful_replications += 1
+
+    def inc_failed_replications(self):
+        with self._lock:
+            self.failed_replications += 1
+
+    def inc_replication_retries(self):
+        with self._lock:
+            self.retry_count += 1
+
+    def inc_degraded_replications(self):
+        with self._lock:
+            self.degraded_replications += 1
+
+    def record_replication_latency(self, duration_ms):
+        with self._lock:
+            self.replication_latency_ms_total += duration_ms
+            self.replication_latency_count += 1
+
     def snapshot(self):
         with self._lock:
             return {
@@ -56,6 +83,19 @@ class Metrics:
                 "fsync_count": self.fsync_count,
                 "fsync_ms_total": round(self.fsync_ms_total, 3),
                 "corruption_events": self.corruption_events,
+                "successful_replications": self.successful_replications,
+                "failed_replications": self.failed_replications,
+                "retry_count": self.retry_count,
+                "degraded_replications": self.degraded_replications,
+                "replication_latency_ms": (
+                    round(
+                        self.replication_latency_ms_total
+                        / self.replication_latency_count,
+                        3,
+                    )
+                    if self.replication_latency_count
+                    else 0.0
+                ),
             }
 
 
