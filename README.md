@@ -8,7 +8,8 @@ A distributed storage system inspired by Nutanix DSF, built incrementally in pha
 |-------|---------|--------|
 | 1 | Storage engine (oplog, cache, extent store, recovery) | Done |
 | 2 | Cluster membership, failure detection, Docker cluster | Done |
-| 3+ | Placement, replication, quorum, self-healing | Planned |
+| 3+ | Placement, replication, quorum, self-healing | Done |
+| 7 | Enterprise dashboard & observability | Done |
 
 ## Architecture (Phase 2)
 
@@ -97,11 +98,22 @@ Expected: `{"node1":"UP","node2":"UP","node3":"UP"}`
 nanofabric/
 ├── metadata/          # Cluster membership & metadata service
 ├── node/              # Storage engine & node API
+├── dashboard/         # Phase 7 — React enterprise console
 ├── tests/             # Unit and integration tests
 ├── docker-compose.yml
 ├── Dockerfile
 └── requirements.txt
 ```
+
+### Dashboard (Phase 7)
+
+```bash
+cd dashboard
+npm install
+npm run dev
+```
+
+Open http://localhost:5173 — proxies API/WebSocket to metadata on `:9000`.
 
 ## License
 

@@ -6,7 +6,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from cluster.repair_factory import build_repair_stack
@@ -149,6 +150,24 @@ def create_app(db_path: Optional[str | Path] = None) -> FastAPI:
     app = FastAPI(title="NanoFabric Metadata Service", lifespan=lifespan)
     if db_path is not None:
         app.state.db_path = Path(db_path)
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    @app.websocket("/ws/cluster")
+    async def ws_cluster(websocket: WebSocket):
+        from metadata.realtime import websocket_cluster
+        await websocket_cluster(websocket, app)
+
+    @app.get("/events/stream")
+    async def events_stream():
+        from metadata.realtime import sse_stream
+        return await sse_stream(app)
 
     @app.get("/health")
     def health():
