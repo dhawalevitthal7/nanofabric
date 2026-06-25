@@ -41,8 +41,9 @@ def failing_service(tmp_path):
 
 def test_replica_down_marks_failed_and_creates_jobs(failing_service):
     svc, _, store = failing_service
-    state = svc.replicate_write("invoice-1", "hello", 1, 5)
-    assert state == ReplicationState.FAILED
+    result = svc.replicate_write("invoice-1", "hello", 1, 5)
+    assert result.state == ReplicationState.FAILED
+    assert result.quorum_satisfied is False
     failed_jobs = store.list_jobs_by_status(JobStatus.FAILED)
     assert len(failed_jobs) == 2
 

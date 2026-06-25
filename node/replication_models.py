@@ -71,3 +71,15 @@ class BlockReplicationState(BaseModel):
     version: int
     replicas: List[str]
     state: ReplicationState
+
+
+class WriteQuorumResult(BaseModel):
+    state: ReplicationState
+    quorum_satisfied: bool
+    ack_count: int
+    required_acks: int
+    replication_factor: int
+    acked_nodes: List[str] = Field(default_factory=list)
+    failed_nodes: List[str] = Field(default_factory=list)
+    outcome: str = "SUCCESS"
+    latency_ms: float = 0.0

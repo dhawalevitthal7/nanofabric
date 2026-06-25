@@ -20,6 +20,13 @@ class Metrics:
         self.replication_latency_ms_total = 0.0
         self.replication_latency_count = 0
         self.degraded_replications = 0
+        self.write_quorum_failures = 0
+        self.read_quorum_failures = 0
+        self.read_repairs = 0
+        self.hint_deliveries = 0
+        self.hint_failures = 0
+        self.quorum_latency_ms_total = 0.0
+        self.quorum_latency_count = 0
 
     def inc_writes(self):
         with self._lock:
@@ -66,6 +73,31 @@ class Metrics:
         with self._lock:
             self.degraded_replications += 1
 
+    def inc_write_quorum_failures(self):
+        with self._lock:
+            self.write_quorum_failures += 1
+
+    def inc_read_quorum_failures(self):
+        with self._lock:
+            self.read_quorum_failures += 1
+
+    def inc_read_repairs(self):
+        with self._lock:
+            self.read_repairs += 1
+
+    def inc_hint_deliveries(self):
+        with self._lock:
+            self.hint_deliveries += 1
+
+    def inc_hint_failures(self):
+        with self._lock:
+            self.hint_failures += 1
+
+    def record_quorum_latency(self, duration_ms):
+        with self._lock:
+            self.quorum_latency_ms_total += duration_ms
+            self.quorum_latency_count += 1
+
     def record_replication_latency(self, duration_ms):
         with self._lock:
             self.replication_latency_ms_total += duration_ms
@@ -87,6 +119,19 @@ class Metrics:
                 "failed_replications": self.failed_replications,
                 "retry_count": self.retry_count,
                 "degraded_replications": self.degraded_replications,
+                "write_quorum_failures": self.write_quorum_failures,
+                "read_quorum_failures": self.read_quorum_failures,
+                "read_repairs": self.read_repairs,
+                "hint_deliveries": self.hint_deliveries,
+                "hint_failures": self.hint_failures,
+                "quorum_latency_ms": (
+                    round(
+                        self.quorum_latency_ms_total / self.quorum_latency_count,
+                        3,
+                    )
+                    if self.quorum_latency_count
+                    else 0.0
+                ),
                 "replication_latency_ms": (
                     round(
                         self.replication_latency_ms_total

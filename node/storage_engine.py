@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from node.cache import Cache
-from node.errors import VersionConflictError
+from node.errors import QuorumNotSatisfiedError, VersionConflictError
 from node.extent_store import ExtentStore
 from node.manifest import Manifest
 from node.metrics import Metrics
@@ -233,9 +233,16 @@ class StorageEngine:
         resolved_version, lsn = self.write_local(block_id, data, version)
 
         if self._replication_service is not None:
-            self._replication_service.replicate_write(
+            result = self._replication_service.replicate_write(
                 block_id, data, resolved_version, lsn
             )
+            if not result.quorum_satisfied:
+                raise QuorumNotSatisfiedError(
+                    block_id,
+                    result.ack_count,
+                    result.required_acks,
+                    result.failed_nodes,
+                )
 
         return True
 
@@ -340,7 +347,14 @@ class StorageEngine:
         version, lsn = self.delete_local(block_id)
 
         if self._replication_service is not None:
-            self._replication_service.replicate_delete(block_id, version, lsn)
+            result = self._replication_service.replicate_delete(block_id, version, lsn)
+            if not result.quorum_satisfied:
+                raise QuorumNotSatisfiedError(
+                    block_id,
+                    result.ack_count,
+                    result.required_acks,
+                    result.failed_nodes,
+                )
 
         return True
 

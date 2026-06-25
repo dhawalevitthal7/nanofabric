@@ -32,6 +32,20 @@ class RoutingReplicaClient:
         from node.replication_models import ReplicateResponse
         return ReplicateResponse(**response.json())
 
+    def read_block(self, target_url, target_node, block_id):
+        client = self._node_clients[target_node]
+        response = client.get(f"/read/{block_id}")
+        if response.status_code == 404:
+            return None
+        if response.status_code >= 400:
+            from node.replica_client import ReplicaClientError
+            raise ReplicaClientError(
+                target_node,
+                f"HTTP {response.status_code}: {response.text}",
+                status_code=response.status_code,
+            )
+        return response.json()
+
     def replicate_delete(self, target_url, target_node, request):
         client = self._node_clients[target_node]
         response = client.post("/replicate-delete", json=request.model_dump())
@@ -108,6 +122,7 @@ def test_cluster(tmp_path) -> Tuple[TestClient, Dict[str, TestClient], TestMetad
             replica_client=routing_client,
             start_worker=False,
             start_heartbeat=False,
+            start_hint_worker=False,
         )
         tc = TestClient(app)
         tc.__enter__()

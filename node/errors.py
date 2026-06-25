@@ -28,3 +28,15 @@ class VersionConflictError(StorageError):
 
 class ValidationError(StorageError):
     pass
+
+
+class QuorumNotSatisfiedError(StorageError):
+    def __init__(self, block_id, acks, required, failed_nodes=None):
+        self.block_id = block_id
+        self.acks = acks
+        self.required = required
+        self.failed_nodes = failed_nodes or []
+        super().__init__(
+            f"write quorum not satisfied for {block_id}: "
+            f"{acks}/{required} acknowledgements"
+        )

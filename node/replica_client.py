@@ -55,6 +55,31 @@ class ReplicaClient:
             request.model_dump(),
         )
 
+    def read_block(
+        self,
+        target_url: str,
+        target_node: str,
+        block_id: str,
+    ) -> Optional[dict]:
+        url = f"{target_url.rstrip('/')}/read/{block_id}"
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                response = client.get(url)
+                if response.status_code == 404:
+                    return None
+                if response.status_code >= 400:
+                    raise ReplicaClientError(
+                        target_node,
+                        f"HTTP {response.status_code}: {response.text}",
+                        status_code=response.status_code,
+                    )
+                return response.json()
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError) as exc:
+            raise ReplicaClientError(
+                target_node,
+                f"replica unreachable: {exc}",
+            ) from exc
+
     def _post_replicate(
         self,
         target_url: str,
