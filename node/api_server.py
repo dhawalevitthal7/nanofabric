@@ -26,6 +26,7 @@ from node.replication_models import ReplicateDeleteRequest, ReplicateRequest
 from node.replication_service import ReplicationService
 from node.replication_worker import ReplicationWorker
 from node.storage_engine import StorageEngine
+from cluster.node_recovery_service import NodeRecoveryService
 
 log = logging.getLogger(__name__)
 
@@ -117,6 +118,24 @@ async def lifespan(app: FastAPI):
     app.state.replication_worker = None
     app.state.hint_worker = None
     app.state.heartbeat = None
+    app.state.node_recovery = None
+
+    node_recovery = NodeRecoveryService(
+        node_id=config["node_id"],
+        list_local_blocks_fn=lambda: [
+            bid for bid in engine.list_blocks()
+            if (r := engine.read_block(bid)) and not r.deleted
+        ],
+        replay_hints_fn=lambda: hinted_handoff.replay_pending(
+            metadata_client.get_node_addresses()
+        ),
+        rebuild_inventory_fn=lambda nid, blocks: None,
+    )
+    app.state.node_recovery = node_recovery
+
+    if config.get("run_node_recovery", True):
+        recovery_result = node_recovery.recover_node()
+        log.info("node recovery complete", extra=recovery_result)
 
     if config.get("start_worker", True):
         worker = ReplicationWorker(replication_service)
@@ -184,6 +203,7 @@ def create_app(
     start_heartbeat: bool = True,
     start_hint_worker: bool = True,
     consistency: ConsistencyLevel = ConsistencyLevel.QUORUM,
+    run_node_recovery: bool = True,
 ) -> FastAPI:
     app = FastAPI(title=f"NanoFabric Node ({node_id})", lifespan=lifespan)
     app.state.config = {
@@ -197,6 +217,7 @@ def create_app(
         "start_heartbeat": start_heartbeat,
         "start_hint_worker": start_hint_worker,
         "consistency": consistency,
+        "run_node_recovery": run_node_recovery,
     }
 
     @app.get("/health")
@@ -433,6 +454,15 @@ def create_app(
             )
         return state.model_dump()
 
+    @app.get("/blocks")
+    def list_blocks(request: Request):
+        engine = request.app.state.engine
+        blocks = [
+            bid for bid in engine.list_blocks()
+            if (r := engine.read_block(bid)) and not r.deleted
+        ]
+        return {"node_id": engine.node_id, "blocks": sorted(blocks)}
+
     @app.get("/replication/stats")
     def replication_stats(request: Request):
         stats = request.app.state.engine.get_stats()
@@ -448,6 +478,15 @@ def create_app(
             "hint_deliveries": stats.get("hint_deliveries", 0),
             "hint_failures": stats.get("hint_failures", 0),
             "quorum_latency_ms": stats.get("quorum_latency_ms", 0.0),
+            "repair_jobs_total": stats.get("repair_jobs_total", 0),
+            "repair_jobs_failed": stats.get("repair_jobs_failed", 0),
+            "repair_jobs_completed": stats.get("repair_jobs_completed", 0),
+            "blocks_rebuilt": stats.get("blocks_rebuilt", 0),
+            "under_replicated_blocks": stats.get("under_replicated_blocks", 0),
+            "over_replicated_blocks": stats.get("over_replicated_blocks", 0),
+            "anti_entropy_repairs": stats.get("anti_entropy_repairs", 0),
+            "orphan_blocks": stats.get("orphan_blocks", 0),
+            "repair_latency_ms": stats.get("repair_latency_ms", 0.0),
         }
 
     @app.get("/stats")
