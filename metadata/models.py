@@ -19,6 +19,27 @@ class RegisterRequest(BaseModel):
 class HeartbeatRequest(BaseModel):
     node_id: str = Field(..., min_length=1)
     timestamp: Optional[int] = None
+    block_count: Optional[int] = None
+    used_bytes: Optional[int] = None
+    last_lsn: Optional[int] = None
+
+
+class AllocateRequest(BaseModel):
+    block_id: str = Field(..., min_length=1)
+    rf: int = Field(default=1, ge=1)
+
+
+class AllocateResponse(BaseModel):
+    nodes: list[str]
+
+
+class BlockLocationsResponse(BaseModel):
+    locations: list[str]
+
+
+class MetadataStatsResponse(BaseModel):
+    total_blocks: int
+    total_placements: int
 
 
 class NodeRecord(BaseModel):

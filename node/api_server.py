@@ -35,6 +35,7 @@ async def lifespan(app: FastAPI):
         metadata_url=config["metadata_url"],
         node_id=config["node_id"],
         address=config["address"],
+        stats_provider=lambda: get_engine().get_stats(),
     )
     _heartbeat.start()
     log.info("node API started", extra={"node_id": config["node_id"]})

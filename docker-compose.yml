@@ -7,6 +7,9 @@ services:
       - "9000:9000"
     environment:
       METADATA_PORT: "9000"
+      METADATA_DB_PATH: /data/metadata.db
+    volumes:
+      - metadata_data:/data
     networks:
       - nanofabric
 
@@ -72,6 +75,7 @@ networks:
     driver: bridge
 
 volumes:
+  metadata_data:
   node1_data:
   node2_data:
   node3_data:

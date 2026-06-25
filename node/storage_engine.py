@@ -297,6 +297,7 @@ class StorageEngine:
             stats = {
                 "node_id": self.node_id,
                 "block_count": self.db.count_blocks(),
+                "used_bytes": oplog_bytes,
                 "oplog_bytes": oplog_bytes,
                 "last_lsn": self.oplog.high_water_lsn,
                 "last_checkpoint_lsn": self._last_checkpoint_lsn,
