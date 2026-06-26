@@ -217,6 +217,42 @@ class RepairJobStore:
             ).fetchall()
         return [self._row_to_job(row) for row in rows]
 
+    def upsert_job(self, job: RepairJob) -> None:
+        with self._lock:
+            self.conn.execute(
+                """
+                INSERT OR REPLACE INTO repair_jobs(
+                    job_id, block_id, source_node, target_node, version,
+                    repair_type, status, attempt_count, last_error,
+                    created_at, updated_at, completed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job.job_id,
+                    job.block_id,
+                    job.source_node,
+                    job.target_node,
+                    job.version,
+                    job.repair_type.value,
+                    job.status.value,
+                    job.attempt_count,
+                    job.last_error,
+                    job.created_at,
+                    job.updated_at,
+                    job.completed_at,
+                ),
+            )
+            self.conn.commit()
+
+    def delete_job(self, job_id: str) -> bool:
+        with self._lock:
+            cursor = self.conn.execute(
+                "DELETE FROM repair_jobs WHERE job_id = ?",
+                (job_id,),
+            )
+            self.conn.commit()
+            return cursor.rowcount > 0
+
     def _row_to_job(self, row) -> RepairJob:
         return RepairJob(
             job_id=row["job_id"],

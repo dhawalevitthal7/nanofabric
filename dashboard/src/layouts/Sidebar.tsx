@@ -7,6 +7,7 @@ import {
   MapPin,
   Copy,
   ShieldCheck,
+  Crown,
   HardDrive,
   Database,
   Camera,
@@ -52,6 +53,7 @@ const navigation: (NavItem | NavSection)[] = [
       { label: 'Placement', path: '/placement', icon: MapPin },
       { label: 'Replication', path: '/replication', icon: Copy },
       { label: 'Consistency', path: '/consistency', icon: ShieldCheck },
+      { label: 'Control Plane', path: '/control-plane', icon: Crown },
     ],
   },
   {

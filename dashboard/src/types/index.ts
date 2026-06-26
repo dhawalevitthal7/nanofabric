@@ -75,6 +75,41 @@ export interface RepairJob {
   completed_at?: number | null
 }
 
+export interface RaftStatus {
+  node_id: string
+  leader: string | null
+  term: number
+  role: 'FOLLOWER' | 'CANDIDATE' | 'LEADER'
+  commit_index: number
+  last_applied: number
+  log_length: number
+  peers: string[]
+  replication_lag: number
+}
+
+export interface RaftLeader {
+  leader: string | null
+  term: number
+  role: string
+  leader_url: string | null
+}
+
+export interface RaftMetrics {
+  raft_current_term: number
+  raft_leader_changes: number
+  raft_log_entries: number
+  raft_commit_index: number
+  raft_append_latency_ms: number
+  raft_election_count: number
+  raft_replication_lag: number
+  election_history: Array<{
+    term: number
+    winner: string | null
+    timestamp: number
+    reason: string
+  }>
+}
+
 export interface NodeStats {
   node_id: string
   block_count: number

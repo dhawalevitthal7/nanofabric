@@ -1,15 +1,55 @@
 services:
-  metadata:
+  metadata1:
     build: .
-    container_name: metadata
+    container_name: metadata1
     command: python -m metadata.main
     ports:
-      - "9000:9000"
+      - "9001:9001"
     environment:
-      METADATA_PORT: "9000"
+      METADATA_PORT: "9001"
       METADATA_DB_PATH: /data/metadata.db
+      RAFT_ENABLED: "true"
+      RAFT_NODE_ID: metadata1
+      RAFT_ADVERTISE_URL: http://metadata1:9001
+      RAFT_PEERS: metadata1=http://metadata1:9001,metadata2=http://metadata2:9002,metadata3=http://metadata3:9003
     volumes:
-      - metadata_data:/data
+      - metadata1_data:/data
+    networks:
+      - nanofabric
+
+  metadata2:
+    build: .
+    container_name: metadata2
+    command: python -m metadata.main
+    ports:
+      - "9002:9002"
+    environment:
+      METADATA_PORT: "9002"
+      METADATA_DB_PATH: /data/metadata.db
+      RAFT_ENABLED: "true"
+      RAFT_NODE_ID: metadata2
+      RAFT_ADVERTISE_URL: http://metadata2:9002
+      RAFT_PEERS: metadata1=http://metadata1:9001,metadata2=http://metadata2:9002,metadata3=http://metadata3:9003
+    volumes:
+      - metadata2_data:/data
+    networks:
+      - nanofabric
+
+  metadata3:
+    build: .
+    container_name: metadata3
+    command: python -m metadata.main
+    ports:
+      - "9003:9003"
+    environment:
+      METADATA_PORT: "9003"
+      METADATA_DB_PATH: /data/metadata.db
+      RAFT_ENABLED: "true"
+      RAFT_NODE_ID: metadata3
+      RAFT_ADVERTISE_URL: http://metadata3:9003
+      RAFT_PEERS: metadata1=http://metadata1:9001,metadata2=http://metadata2:9002,metadata3=http://metadata3:9003
+    volumes:
+      - metadata3_data:/data
     networks:
       - nanofabric
 
@@ -23,12 +63,13 @@ services:
       NODE_ID: node1
       NODE_PORT: "8001"
       NODE_ADDRESS: node1:8001
-      METADATA_URL: http://metadata:9000
-      DATA_DIR: /data
+      METADATA_URL: http://metadata1:9001
     volumes:
       - node1_data:/data
     depends_on:
-      - metadata
+      - metadata1
+      - metadata2
+      - metadata3
     networks:
       - nanofabric
 
@@ -42,12 +83,13 @@ services:
       NODE_ID: node2
       NODE_PORT: "8002"
       NODE_ADDRESS: node2:8002
-      METADATA_URL: http://metadata:9000
-      DATA_DIR: /data
+      METADATA_URL: http://metadata1:9001
     volumes:
       - node2_data:/data
     depends_on:
-      - metadata
+      - metadata1
+      - metadata2
+      - metadata3
     networks:
       - nanofabric
 
@@ -61,12 +103,13 @@ services:
       NODE_ID: node3
       NODE_PORT: "8003"
       NODE_ADDRESS: node3:8003
-      METADATA_URL: http://metadata:9000
-      DATA_DIR: /data
+      METADATA_URL: http://metadata1:9001
     volumes:
       - node3_data:/data
     depends_on:
-      - metadata
+      - metadata1
+      - metadata2
+      - metadata3
     networks:
       - nanofabric
 
@@ -75,7 +118,9 @@ networks:
     driver: bridge
 
 volumes:
-  metadata_data:
+  metadata1_data:
+  metadata2_data:
+  metadata3_data:
   node1_data:
   node2_data:
   node3_data:

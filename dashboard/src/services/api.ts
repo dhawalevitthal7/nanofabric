@@ -30,6 +30,9 @@ export const api = {
     request<unknown>('/repairs/node', { method: 'POST', body: JSON.stringify({ node_id: nodeId }) }),
   nodeBlocks: (nodeId: string) => request<{ node_id: string; blocks: string[] }>(`/nodes/${nodeId}/blocks`),
   blockLocations: (blockId: string) => request<{ locations: string[] }>(`/blocks/${blockId}`),
+  raftStatus: () => request<import('@/types').RaftStatus>('/raft/status'),
+  raftLeader: () => request<import('@/types').RaftLeader>('/raft/leader'),
+  raftMetrics: () => request<import('@/types').RaftMetrics>('/raft/metrics'),
 }
 
 export async function fetchNodeStats(address: string): Promise<import('@/types').NodeStats | null> {

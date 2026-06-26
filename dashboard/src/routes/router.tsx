@@ -12,6 +12,7 @@ import { MetricsPage } from '@/features/metrics/MetricsPage'
 import { PerformancePage } from '@/features/metrics/PerformancePage'
 import { LogsPage } from '@/features/logs/LogsPage'
 import { AlertsPage } from '@/features/alerts/AlertsPage'
+import { ControlPlanePage } from '@/features/control-plane/ControlPlanePage'
 import { PlaceholderPage } from '@/features/shared/PlaceholderPage'
 
 const rootRoute = createRootRoute({
@@ -96,6 +97,12 @@ const alertsRoute = createRoute({
   component: AlertsPage,
 })
 
+const controlPlaneRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/control-plane',
+  component: ControlPlanePage,
+})
+
 const placeholder = (path: string, title: string, description: string) =>
   createRoute({
     getParentRoute: () => layoutRoute,
@@ -113,6 +120,7 @@ const routeTree = rootRoute.addChildren([
     replicationRoute,
     consistencyRoute,
     repairsRoute,
+    controlPlaneRoute,
     metricsRoute,
     performanceRoute,
     logsRoute,

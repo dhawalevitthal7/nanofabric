@@ -6,8 +6,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from cluster.repair_factory import build_repair_stack
@@ -33,6 +34,21 @@ from metadata.placement_service import (
     InsufficientNodesError,
     PlacementService,
 )
+from metadata.raft.alert_store import AlertStore
+from metadata.raft.config import RaftConfig, load_raft_config
+from metadata.raft.metrics import RaftMetrics
+from metadata.raft.models import (
+    AppendEntriesRequest,
+    AppendEntriesResponse,
+    CommandType,
+    RaftLeaderResponse,
+    RaftStatusResponse,
+    RequestVoteRequest,
+    RequestVoteResponse,
+)
+from metadata.raft.node import RaftNode
+from metadata.raft.state_machine import RaftStateMachine
+from metadata.raft.storage import RaftStorage
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +62,10 @@ _placement_policy: Optional[RoundRobinPlacementPolicy] = None
 _repair_service = None
 _repair_worker: Optional[RepairWorker] = None
 _repair_metrics: Optional[RepairMetrics] = None
+_raft_node: Optional[RaftNode] = None
+_raft_metrics: Optional[RaftMetrics] = None
+_alert_store: Optional[AlertStore] = None
+_raft_config: Optional[RaftConfig] = None
 
 
 class RepairBlockRequest(BaseModel):
@@ -80,6 +100,41 @@ def get_store() -> MetadataStore:
     return _store
 
 
+def get_raft_node() -> Optional[RaftNode]:
+    return _raft_node
+
+
+def get_alert_store() -> AlertStore:
+    if _alert_store is None:
+        raise RuntimeError("Alert store is not initialized")
+    return _alert_store
+
+
+def _raft_enabled() -> bool:
+    return _raft_node is not None
+
+
+def _leader_redirect():
+    if _raft_node is None or _raft_node.is_leader():
+        return None
+    url = _raft_node.leader_url()
+    if url:
+        return RedirectResponse(url=url, status_code=307)
+    raise HTTPException(status_code=503, detail="No Raft leader available")
+
+
+def _propose_or_raise(command: CommandType, payload: dict) -> None:
+    if _raft_node is None:
+        return
+    result = _raft_node.propose(command, payload)
+    if not result.success:
+        if result.error == "not leader":
+            redirect = _leader_redirect()
+            if redirect:
+                raise HTTPException(status_code=307, headers={"Location": _raft_node.leader_url() or ""})
+        raise HTTPException(status_code=503, detail=result.error or "raft propose failed")
+
+
 def _default_db_path() -> Path:
     return Path(os.environ.get("METADATA_DB_PATH", "metadata.db"))
 
@@ -88,6 +143,7 @@ def _default_db_path() -> Path:
 async def lifespan(app: FastAPI):
     global _registry, _detector, _store, _placement_registry, _inventory
     global _placement_service, _placement_policy, _repair_service, _repair_worker, _repair_metrics
+    global _raft_node, _raft_metrics, _alert_store, _raft_config
 
     db_path = app.state.db_path if hasattr(app.state, "db_path") else _default_db_path()
     _store = MetadataStore(db_path)
@@ -95,6 +151,7 @@ async def lifespan(app: FastAPI):
     _placement_registry = PlacementRegistry()
     _inventory = NodeInventory()
     _placement_policy = RoundRobinPlacementPolicy()
+    _alert_store = AlertStore()
     _placement_service = PlacementService(
         registry=_registry,
         placement_registry=_placement_registry,
@@ -118,6 +175,40 @@ async def lifespan(app: FastAPI):
         node_client=app.state.node_client if hasattr(app.state, "node_client") else None,
     )
 
+    _raft_config = getattr(app.state, "raft_config", None) or load_raft_config()
+    if _raft_config and _raft_config.enabled:
+        raft_db = db_path.parent / "raft.db"
+        raft_storage = RaftStorage(raft_db)
+        _raft_metrics = RaftMetrics()
+        state_machine = RaftStateMachine(
+            membership=_registry,
+            placement_registry=_placement_registry,
+            inventory=_inventory,
+            store=_store,
+            alert_store=_alert_store,
+            repair_store=_repair_service._job_store,
+        )
+        peer_urls = dict(_raft_config.peer_urls)
+        if _raft_config.advertise_url:
+            peer_urls[_raft_config.node_id] = _raft_config.advertise_url
+
+        _raft_node = RaftNode(
+            node_id=_raft_config.node_id,
+            peer_urls=peer_urls,
+            storage=raft_storage,
+            state_machine=state_machine,
+            metrics=_raft_metrics,
+            election_min_ms=_raft_config.election_min_ms,
+            election_max_ms=_raft_config.election_max_ms,
+            snapshot_threshold=_raft_config.snapshot_threshold,
+            rpc_client=getattr(app.state, "raft_rpc_client", None),
+        )
+        _raft_node.start()
+        log.info(
+            "raft cluster enabled",
+            extra={"node_id": _raft_config.node_id, "peers": list(peer_urls.keys())},
+        )
+
     start_repair_worker = getattr(app.state, "start_repair_worker", True)
     if start_repair_worker:
         _repair_worker = RepairWorker(_repair_service)
@@ -125,6 +216,8 @@ async def lifespan(app: FastAPI):
 
     log.info("metadata service started", extra={"db_path": str(db_path)})
     yield
+    if _raft_node:
+        _raft_node.stop()
     if _repair_worker:
         _repair_worker.stop()
     if _detector:
@@ -133,6 +226,10 @@ async def lifespan(app: FastAPI):
         _repair_service._job_store.close()
     if _store:
         _store.close()
+    _raft_node = None
+    _raft_metrics = None
+    _alert_store = None
+    _raft_config = None
     _repair_worker = None
     _repair_service = None
     _repair_metrics = None
@@ -146,10 +243,12 @@ async def lifespan(app: FastAPI):
     log.info("metadata service stopped")
 
 
-def create_app(db_path: Optional[str | Path] = None) -> FastAPI:
+def create_app(db_path: Optional[str | Path] = None, raft_config: Optional[RaftConfig] = None) -> FastAPI:
     app = FastAPI(title="NanoFabric Metadata Service", lifespan=lifespan)
     if db_path is not None:
         app.state.db_path = Path(db_path)
+    if raft_config is not None:
+        app.state.raft_config = raft_config
 
     app.add_middleware(
         CORSMiddleware,
@@ -174,21 +273,142 @@ def create_app(db_path: Optional[str | Path] = None) -> FastAPI:
         registry = get_registry()
         summary = registry.get_cluster_summary()
         up_count = sum(1 for status in summary.values() if status == "UP")
-        return {
+        body = {
             "status": "ok",
             "nodes_total": len(summary),
             "nodes_up": up_count,
             "nodes_down": len(summary) - up_count,
         }
+        if _raft_node:
+            body["raft"] = _raft_node.get_status()
+        return body
+
+    @app.post("/raft/request-vote", response_model=RequestVoteResponse)
+    def raft_request_vote(request: RequestVoteRequest):
+        if _raft_node is None:
+            raise HTTPException(status_code=404, detail="Raft not enabled")
+        return _raft_node.handle_request_vote(request)
+
+    @app.post("/raft/append-entries", response_model=AppendEntriesResponse)
+    def raft_append_entries(request: AppendEntriesRequest):
+        if _raft_node is None:
+            raise HTTPException(status_code=404, detail="Raft not enabled")
+        return _raft_node.handle_append_entries(request)
+
+    @app.get("/raft/status", response_model=RaftStatusResponse)
+    def raft_status():
+        if _raft_node is None:
+            raise HTTPException(status_code=404, detail="Raft not enabled")
+        return RaftStatusResponse(**_raft_node.get_status())
+
+    @app.get("/raft/leader", response_model=RaftLeaderResponse)
+    def raft_leader():
+        if _raft_node is None:
+            raise HTTPException(status_code=404, detail="Raft not enabled")
+        status = _raft_node.get_status()
+        return RaftLeaderResponse(
+            leader=status["leader"],
+            term=status["term"],
+            role=status["role"],
+            leader_url=_raft_node.leader_url(),
+        )
+
+    @app.get("/raft/metrics")
+    def raft_metrics():
+        if _raft_metrics is None:
+            raise HTTPException(status_code=404, detail="Raft not enabled")
+        return _raft_metrics.get_snapshot()
+
+    @app.get("/raft/alerts")
+    def raft_alerts():
+        return get_alert_store().list_alerts()
+
+    class ReconfigureRequest(BaseModel):
+        peers: list[str]
+        peer_urls: dict[str, str] = Field(default_factory=dict)
+
+    @app.post("/raft/reconfigure")
+    def raft_reconfigure(body: ReconfigureRequest):
+        redirect = _leader_redirect()
+        if redirect:
+            return redirect
+        peer_urls = body.peer_urls or {
+            pid: f"http://localhost:900{int(pid[-1])}" for pid in body.peers
+        }
+        result = _raft_node.propose(
+            CommandType.RECONFIGURE_CLUSTER,
+            {"peers": body.peers, "peer_urls": peer_urls},
+        )
+        if not result.success:
+            raise HTTPException(status_code=503, detail=result.error)
+        _raft_node.reconfigure_peers(peer_urls)
+        return {"peers": body.peers, "committed": True}
+
+    @app.post("/raft/peers/add")
+    def raft_add_peer(peer_id: str, peer_url: str):
+        redirect = _leader_redirect()
+        if redirect:
+            return redirect
+        result = _raft_node.propose(CommandType.ADD_PEER, {"peer_id": peer_id, "peer_url": peer_url})
+        if not result.success:
+            raise HTTPException(status_code=503, detail=result.error)
+        urls = dict(_raft_node.peer_urls)
+        urls[peer_id] = peer_url
+        _raft_node.reconfigure_peers(urls)
+        return {"peer_id": peer_id, "added": True}
+
+    @app.post("/raft/peers/remove")
+    def raft_remove_peer(peer_id: str):
+        redirect = _leader_redirect()
+        if redirect:
+            return redirect
+        result = _raft_node.propose(CommandType.REMOVE_PEER, {"peer_id": peer_id})
+        if not result.success:
+            raise HTTPException(status_code=503, detail=result.error)
+        urls = {k: v for k, v in _raft_node.peer_urls.items() if k != peer_id}
+        _raft_node.reconfigure_peers(urls)
+        return {"peer_id": peer_id, "removed": True}
 
     @app.post("/register", response_model=NodeRecord)
     def register(request: RegisterRequest):
+        redirect = _leader_redirect()
+        if redirect:
+            return redirect
+
+        if _raft_enabled():
+            _propose_or_raise(
+                CommandType.REGISTER_NODE,
+                {"node_id": request.node_id, "address": request.address},
+            )
+            record = get_registry().get_node(request.node_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail=f"Node '{request.node_id}' not found")
+            return record
+
         record = get_registry().register(request.node_id, request.address)
         get_store().upsert_node(request.node_id, status="UP", last_seen=record.last_seen)
         return record
 
     @app.post("/heartbeat", response_model=NodeRecord)
     def heartbeat(request: HeartbeatRequest):
+        redirect = _leader_redirect()
+        if redirect:
+            return redirect
+
+        if _raft_enabled():
+            payload = {
+                "node_id": request.node_id,
+                "timestamp": request.timestamp,
+                "block_count": request.block_count,
+                "used_bytes": request.used_bytes,
+                "last_lsn": request.last_lsn,
+            }
+            _propose_or_raise(CommandType.UPDATE_HEARTBEAT, payload)
+            record = get_registry().get_node(request.node_id)
+            if record is None:
+                raise HTTPException(status_code=404, detail=f"Node '{request.node_id}' is not registered")
+            return record
+
         try:
             record = get_registry().heartbeat(request.node_id, request.timestamp)
         except KeyError as exc:
@@ -225,7 +445,27 @@ def create_app(db_path: Optional[str | Path] = None) -> FastAPI:
 
     @app.post("/allocate", response_model=AllocateResponse)
     def allocate(request: AllocateRequest):
+        redirect = _leader_redirect()
+        if redirect:
+            return redirect
+
         try:
+            if _raft_enabled():
+                service = get_placement_service()
+                if service._placement_registry.block_exists(request.block_id):
+                    raise BlockAlreadyExistsError(f"Block '{request.block_id}' already allocated")
+                healthy = service.get_healthy_nodes()
+                if len(healthy) < request.rf:
+                    raise InsufficientNodesError(
+                        f"Need {request.rf} healthy nodes but only {len(healthy)} available"
+                    )
+                nodes = service._policy.select_nodes(healthy, request.rf)
+                _propose_or_raise(
+                    CommandType.ALLOCATE_BLOCK,
+                    {"block_id": request.block_id, "rf": request.rf, "version": 1, "nodes": nodes},
+                )
+                return AllocateResponse(nodes=nodes)
+
             nodes = get_placement_service().allocate_block(
                 block_id=request.block_id,
                 rf=request.rf,
