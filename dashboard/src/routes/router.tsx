@@ -13,6 +13,9 @@ import { PerformancePage } from '@/features/metrics/PerformancePage'
 import { LogsPage } from '@/features/logs/LogsPage'
 import { AlertsPage } from '@/features/alerts/AlertsPage'
 import { ControlPlanePage } from '@/features/control-plane/ControlPlanePage'
+import { SnapshotsPage } from '@/features/protection/SnapshotsPage'
+import { BackupsPage } from '@/features/protection/BackupsPage'
+import { RestoreJobsPage, ProtectionPoliciesPage } from '@/features/protection/ProtectionPages'
 import { PlaceholderPage } from '@/features/shared/PlaceholderPage'
 
 const rootRoute = createRootRoute({
@@ -103,6 +106,30 @@ const controlPlaneRoute = createRoute({
   component: ControlPlanePage,
 })
 
+const snapshotsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/snapshots',
+  component: SnapshotsPage,
+})
+
+const backupsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/backups',
+  component: BackupsPage,
+})
+
+const restoreJobsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/restore-jobs',
+  component: RestoreJobsPage,
+})
+
+const protectionPoliciesRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/protection-policies',
+  component: ProtectionPoliciesPage,
+})
+
 const placeholder = (path: string, title: string, description: string) =>
   createRoute({
     getParentRoute: () => layoutRoute,
@@ -121,14 +148,16 @@ const routeTree = rootRoute.addChildren([
     consistencyRoute,
     repairsRoute,
     controlPlaneRoute,
+    snapshotsRoute,
+    backupsRoute,
+    restoreJobsRoute,
+    protectionPoliciesRoute,
     metricsRoute,
     performanceRoute,
     logsRoute,
     alertsRoute,
     placeholder('/blocks', 'Blocks', 'Block inventory and lifecycle management'),
     placeholder('/capacity', 'Capacity', 'Storage capacity planning and forecasting'),
-    placeholder('/snapshots', 'Snapshots', 'Point-in-time snapshot management'),
-    placeholder('/backups', 'Backups', 'Backup policies and restore operations'),
     placeholder('/jobs', 'Jobs', 'Background job scheduler and history'),
     placeholder('/events', 'Events', 'Cluster event timeline'),
     placeholder('/traces', 'Traces', 'Distributed tracing and request flows'),

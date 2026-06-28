@@ -33,6 +33,33 @@ export const api = {
   raftStatus: () => request<import('@/types').RaftStatus>('/raft/status'),
   raftLeader: () => request<import('@/types').RaftLeader>('/raft/leader'),
   raftMetrics: () => request<import('@/types').RaftMetrics>('/raft/metrics'),
+  snapshots: () => request<import('@/types').Snapshot[]>('/snapshots'),
+  createSnapshot: () => request<import('@/types').Snapshot>('/snapshots', { method: 'POST' }),
+  deleteSnapshot: (id: string) =>
+    request<{ deleted: boolean }>(`/snapshots/${id}`, { method: 'DELETE' }),
+  restoreSnapshot: (id: string) =>
+    request<import('@/types').RestoreJobRecord>(`/snapshots/${id}/restore`, { method: 'POST' }),
+  backups: () => request<import('@/types').Backup[]>('/backups'),
+  createBackup: (body?: { backup_type?: string; base_backup_id?: string }) =>
+    request<import('@/types').Backup>('/backups', {
+      method: 'POST',
+      body: JSON.stringify(body ?? { backup_type: 'FULL' }),
+    }),
+  restoreBackup: (id: string) =>
+    request<import('@/types').RestoreJobRecord>(`/backups/${id}/restore`, { method: 'POST' }),
+  snapshotPolicies: () => request<import('@/types').SnapshotPolicy[]>('/snapshot-policies'),
+  createSnapshotPolicy: (body: {
+    name: string
+    schedule: string
+    retention_count?: number
+    enabled?: boolean
+  }) =>
+    request<import('@/types').SnapshotPolicy>('/snapshot-policies', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  restoreJobs: () => request<import('@/types').RestoreJobRecord[]>('/restore-jobs'),
+  protectionMetrics: () => request<import('@/types').ProtectionMetrics>('/protection/metrics'),
 }
 
 export async function fetchNodeStats(address: string): Promise<import('@/types').NodeStats | null> {

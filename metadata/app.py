@@ -49,6 +49,10 @@ from metadata.raft.models import (
 from metadata.raft.node import RaftNode
 from metadata.raft.state_machine import RaftStateMachine
 from metadata.raft.storage import RaftStorage
+from storage.models import BackupType, PolicySchedule
+from storage.protection_factory import build_protection_stack
+from storage.cluster_bridge import ClusterBlockBridge, make_placement_restore
+from cluster.node_client import NodeClient
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +70,7 @@ _raft_node: Optional[RaftNode] = None
 _raft_metrics: Optional[RaftMetrics] = None
 _alert_store: Optional[AlertStore] = None
 _raft_config: Optional[RaftConfig] = None
+_protection_stack = None
 
 
 class RepairBlockRequest(BaseModel):
@@ -102,6 +107,12 @@ def get_store() -> MetadataStore:
 
 def get_raft_node() -> Optional[RaftNode]:
     return _raft_node
+
+
+def get_protection_stack():
+    if _protection_stack is None:
+        raise RuntimeError("Protection stack is not initialized")
+    return _protection_stack
 
 
 def get_alert_store() -> AlertStore:
@@ -143,7 +154,7 @@ def _default_db_path() -> Path:
 async def lifespan(app: FastAPI):
     global _registry, _detector, _store, _placement_registry, _inventory
     global _placement_service, _placement_policy, _repair_service, _repair_worker, _repair_metrics
-    global _raft_node, _raft_metrics, _alert_store, _raft_config
+    global _raft_node, _raft_metrics, _alert_store, _raft_config, _protection_stack
 
     db_path = app.state.db_path if hasattr(app.state, "db_path") else _default_db_path()
     _store = MetadataStore(db_path)
@@ -214,6 +225,31 @@ async def lifespan(app: FastAPI):
         _repair_worker = RepairWorker(_repair_service)
         _repair_worker.start()
 
+    protection_dir = db_path.parent / "protection"
+    node_client = app.state.node_client if hasattr(app.state, "node_client") else NodeClient()
+
+    def get_addresses():
+        nodes = _registry.get_all_nodes()
+        return {nid: rec.address for nid, rec in nodes.items()}
+
+    block_bridge = getattr(app.state, "block_bridge", None) or ClusterBlockBridge(
+        node_client=node_client,
+        get_addresses=get_addresses,
+        get_placements=lambda: _placement_service.list_all_placements(),
+        placement_service=_placement_service,
+    )
+    restore_placement = make_placement_restore(_store, _placement_registry)
+    start_protection_scheduler = getattr(app.state, "start_protection_scheduler", False)
+    _protection_stack = getattr(app.state, "protection_stack", None) or build_protection_stack(
+        data_dir=protection_dir,
+        read_blocks=block_bridge,
+        write_blocks=block_bridge,
+        get_metadata_version=lambda: _store.get_stats()["total_blocks"],
+        get_placements=lambda: _placement_service.list_all_placements(),
+        restore_placement=restore_placement,
+        start_scheduler=start_protection_scheduler,
+    )
+
     log.info("metadata service started", extra={"db_path": str(db_path)})
     yield
     if _raft_node:
@@ -224,12 +260,15 @@ async def lifespan(app: FastAPI):
         _detector.stop()
     if _repair_service is not None:
         _repair_service._job_store.close()
+    if _protection_stack:
+        _protection_stack.close()
     if _store:
         _store.close()
     _raft_node = None
     _raft_metrics = None
     _alert_store = None
     _raft_config = None
+    _protection_stack = None
     _repair_worker = None
     _repair_service = None
     _repair_metrics = None
@@ -549,6 +588,111 @@ def create_app(db_path: Optional[str | Path] = None, raft_config: Optional[RaftC
     @app.post("/repairs/node")
     def repair_node(body: RepairNodeRequest):
         return get_repair_service().repair_node(body.node_id)
+
+    class BackupCreateRequest(BaseModel):
+        backup_type: BackupType = BackupType.FULL
+        base_backup_id: Optional[str] = None
+
+    class SnapshotPolicyRequest(BaseModel):
+        name: str = Field(..., min_length=1)
+        schedule: PolicySchedule
+        retention_count: int = Field(default=7, ge=1)
+        enabled: bool = True
+
+    @app.post("/snapshots")
+    def create_snapshot():
+        stack = get_protection_stack()
+        snapshot = stack.snapshot_manager.create_snapshot()
+        return snapshot.model_dump()
+
+    @app.get("/snapshots")
+    def list_snapshots():
+        stack = get_protection_stack()
+        return [s.model_dump() for s in stack.snapshot_manager.list_snapshots()]
+
+    @app.get("/snapshots/{snapshot_id}")
+    def get_snapshot(snapshot_id: str):
+        stack = get_protection_stack()
+        snapshot = stack.snapshot_manager.get_snapshot(snapshot_id)
+        if not snapshot:
+            raise HTTPException(status_code=404, detail=f"Snapshot '{snapshot_id}' not found")
+        return snapshot.model_dump()
+
+    @app.delete("/snapshots/{snapshot_id}")
+    def delete_snapshot(snapshot_id: str):
+        stack = get_protection_stack()
+        if not stack.snapshot_manager.delete_snapshot(snapshot_id):
+            raise HTTPException(status_code=404, detail=f"Snapshot '{snapshot_id}' not found")
+        return {"deleted": True, "snapshot_id": snapshot_id}
+
+    @app.post("/snapshots/{snapshot_id}/restore")
+    def restore_snapshot(snapshot_id: str):
+        stack = get_protection_stack()
+        job = stack.restore_service.restore_snapshot(snapshot_id)
+        if job.status.value == "FAILED" and job.error:
+            raise HTTPException(status_code=400, detail=job.error)
+        return job.model_dump()
+
+    @app.post("/backups")
+    def create_backup(body: BackupCreateRequest = BackupCreateRequest()):
+        stack = get_protection_stack()
+        backup = stack.backup_service.create_backup(
+            backup_type=body.backup_type,
+            base_backup_id=body.base_backup_id,
+        )
+        return backup.model_dump()
+
+    @app.get("/backups")
+    def list_backups():
+        stack = get_protection_stack()
+        return [b.model_dump() for b in stack.backup_service.list_backups()]
+
+    @app.get("/backups/{backup_id}")
+    def get_backup(backup_id: str):
+        stack = get_protection_stack()
+        backup = stack.backup_service.get_backup(backup_id)
+        if not backup:
+            raise HTTPException(status_code=404, detail=f"Backup '{backup_id}' not found")
+        return backup.model_dump()
+
+    @app.post("/backups/{backup_id}/restore")
+    def restore_backup(backup_id: str):
+        stack = get_protection_stack()
+        job = stack.restore_service.restore_backup(backup_id, stack.backup_service)
+        if job.status.value == "FAILED" and job.error:
+            raise HTTPException(status_code=400, detail=job.error)
+        return job.model_dump()
+
+    @app.post("/snapshot-policies")
+    def create_snapshot_policy(body: SnapshotPolicyRequest):
+        stack = get_protection_stack()
+        policy = stack.scheduler.create_policy(
+            name=body.name,
+            schedule=body.schedule,
+            retention_count=body.retention_count,
+            enabled=body.enabled,
+        )
+        return policy.model_dump()
+
+    @app.get("/snapshot-policies")
+    def list_snapshot_policies():
+        stack = get_protection_stack()
+        return [p.model_dump() for p in stack.scheduler.list_policies()]
+
+    @app.get("/restore-jobs")
+    def list_restore_jobs():
+        stack = get_protection_stack()
+        return [j.model_dump() for j in stack.restore_service.list_restore_jobs()]
+
+    @app.get("/protection/metrics")
+    def protection_metrics():
+        stack = get_protection_stack()
+        return stack.metrics.snapshot()
+
+    @app.post("/protection/cleanup")
+    def protection_cleanup(retention_count: int = 7):
+        stack = get_protection_stack()
+        return stack.retention_manager.run_cleanup(retention_count)
 
     return app
 

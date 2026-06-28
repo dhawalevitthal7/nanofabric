@@ -197,3 +197,58 @@ export interface SearchResult {
   label: string
   path: string
 }
+
+export interface Snapshot {
+  snapshot_id: string
+  timestamp: number
+  block_count: number
+  metadata_version: number
+  status: string
+  size_bytes: number
+  placements: Record<string, string[]>
+  error?: string | null
+}
+
+export interface Backup {
+  backup_id: string
+  backup_type: 'FULL' | 'INCREMENTAL'
+  timestamp: number
+  snapshot_ids: string[]
+  block_count: number
+  size_bytes: number
+  status: string
+  archive_path?: string | null
+  base_backup_id?: string | null
+  error?: string | null
+}
+
+export interface RestoreJobRecord {
+  job_id: string
+  source_type: string
+  source_id: string
+  status: string
+  blocks_restored: number
+  placements_restored: number
+  created_at: number
+  completed_at?: number | null
+  duration_ms?: number | null
+  error?: string | null
+}
+
+export interface SnapshotPolicy {
+  policy_id: string
+  name: string
+  schedule: 'hourly' | 'daily' | 'weekly'
+  retention_count: number
+  enabled: boolean
+  last_run_at?: number | null
+  next_run_at?: number | null
+}
+
+export interface ProtectionMetrics {
+  snapshots_total: number
+  snapshot_size_bytes: number
+  backups_total: number
+  restore_jobs_total: number
+  restore_duration_ms: number
+}

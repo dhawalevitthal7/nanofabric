@@ -363,6 +363,15 @@ class StorageEngine:
         with self._lock:
             return self.db.list_blocks()
 
+    def purge_all_blocks(self):
+        """Remove all blocks — used during disaster recovery restore."""
+        self._ensure_open()
+        with self._lock:
+            self.db.conn.execute("DELETE FROM blocks")
+            self.db.conn.commit()
+            self.cache._store.clear()
+            self._update_manifest()
+
     def checkpoint(self, through_lsn=None):
         """Record checkpoint and compact oplog entries at or below through_lsn."""
         self._ensure_open()

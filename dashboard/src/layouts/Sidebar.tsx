@@ -27,6 +27,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Activity,
+  RefreshCw,
+  Shield,
 } from 'lucide-react'
 import { cn } from '@/utils'
 import { useUiStore, useClusterStore } from '@/stores'
@@ -63,6 +65,8 @@ const navigation: (NavItem | NavSection)[] = [
       { label: 'Capacity', path: '/capacity', icon: Database },
       { label: 'Snapshots', path: '/snapshots', icon: Camera },
       { label: 'Backups', path: '/backups', icon: Archive },
+      { label: 'Restore Jobs', path: '/restore-jobs', icon: RefreshCw },
+      { label: 'Protection Policies', path: '/protection-policies', icon: Shield },
     ],
   },
   {

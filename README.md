@@ -11,6 +11,7 @@ A distributed storage system inspired by Nutanix DSF, built incrementally in pha
 | 3+ | Placement, replication, quorum, self-healing | Done |
 | 7 | Enterprise dashboard & observability | Done |
 | 8 | Highly available metadata (Raft consensus) | Done |
+| 9 | Snapshots, backup & disaster recovery | Done |
 
 ## Architecture (Phase 8)
 
@@ -114,6 +115,15 @@ Expected: `{"node1":"UP","node2":"UP","node3":"UP"}`
 | GET | `/raft/metrics` | Raft observability metrics |
 | POST | `/raft/request-vote` | Raft RequestVote RPC |
 | POST | `/raft/append-entries` | Raft AppendEntries RPC |
+| POST | `/snapshots` | Create point-in-time snapshot |
+| GET | `/snapshots` | List snapshots |
+| DELETE | `/snapshots/{id}` | Delete snapshot |
+| POST | `/snapshots/{id}/restore` | Restore snapshot |
+| POST | `/backups` | Create full/incremental backup |
+| GET | `/backups` | List backups |
+| POST | `/backups/{id}/restore` | Restore backup |
+| POST | `/snapshot-policies` | Create scheduled snapshot policy |
+| GET | `/protection/metrics` | Data protection metrics |
 
 **Node** (`:8001`–`:8003`)
 
@@ -130,6 +140,7 @@ Expected: `{"node1":"UP","node2":"UP","node3":"UP"}`
 nanofabric/
 ├── metadata/          # Cluster membership & metadata service
 │   └── raft/          # Raft consensus (leader election, log replication)
+├── storage/           # Phase 9 — snapshots, backups, DR
 ├── node/              # Storage engine & node API
 ├── dashboard/         # Phase 7 — React enterprise console
 ├── tests/             # Unit and integration tests
